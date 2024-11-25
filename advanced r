@@ -1,0 +1,107 @@
+# part 1
+
+library(readxl)  # For reading Excel files
+library(dplyr)   # For data manipulation
+library(readr)   # For reading CSV and TSV files
+
+# Load the data
+gene_expression <- read_excel("Gene_Expression_Data.xlsx")
+gene_info <- read_csv("Gene_Information.csv")
+sample_info <- read_tsv("Sample_Information.tsv")
+
+# Change sample names based on phenotypes
+sample_names <- sample_info %>% 
+  select(Sample_ID, Phenotype) %>% 
+  deframe()
+
+colnames(gene_expression)[-1] <- sample_names[colnames(gene_expression)[-1]]
+
+# Separate columns into Tumor and Normal
+tumor_samples <- sample_info %>% filter(Phenotype == "Tumor") %>% pull(Sample_ID)
+normal_samples <- sample_info %>% filter(Phenotype == "Normal") %>% pull(Sample_ID)
+
+tumor_data <- gene_expression %>%
+  select(Probe_ID, all_of(tumor_samples))
+
+normal_data <- gene_expression %>%
+  select(Probe_ID, all_of(normal_samples))
+
+# Compute averages for Tumor and Normal groups
+tumor_avg <- tumor_data %>%
+  rowwise() %>%
+  mutate(Average_Tumor = mean(c_across(-Probe_ID), na.rm = TRUE)) %>%
+  select(Probe_ID, Average_Tumor)
+
+normal_avg <- normal_data %>%
+  rowwise() %>%
+  mutate(Average_Normal = mean(c_across(-Probe_ID), na.rm = TRUE)) %>%
+  select(Probe_ID, Average_Normal)
+
+# Merge tumor and normal averages and calculate Log2 Fold Change
+significant_genes <- tumor_avg %>%
+  inner_join(normal_avg, by = "Probe_ID") %>%
+  mutate(Log2_Fold_Change = log2((Average_Tumor - Average_Normal) / Average_Normal)) %>%
+  filter(abs(Log2_Fold_Change) > 5) %>%
+  mutate(Higher_Expression = ifelse(Log2_Fold_Change > 0, "Tumor", "Normal"))
+
+write.csv(significant_genes, "Significant_Genes.csv", row.names = FALSE)
+
+# part 2
+
+library(ggplot2)    # For visualization
+library(dplyr)      # For data manipulation
+library(pheatmap)   # For heatmap
+library(tidyr)      # For data reshaping
+
+# Load necessary data
+# Assuming significant_genes (part 1g) is already generated
+# Assuming gene_info is already loaded
+
+# Merge significant genes with chromosome data from gene_info
+significant_genes <- significant_genes %>%
+  left_join(gene_info, by = c("Probe_ID" = "Gene_ID"))
+
+# Histogram: Distribution of DEGs by chromosome
+chromosome_counts <- significant_genes %>%
+  group_by(Chromosome) %>%
+  summarize(Count = n())
+
+ggplot(chromosome_counts, aes(x = Chromosome, y = Count)) +
+  geom_histogram(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Distribution of Differentially Expressed Genes (DEGs) by Chromosome",
+       x = "Chromosome", y = "Number of DEGs")
+
+# Histogram: DEGs by chromosome segregated by sample type
+segregated_counts <- significant_genes %>%
+  group_by(Chromosome, Higher_Expression) %>%
+  summarize(Count = n())
+
+ggplot(segregated_counts, aes(x = Chromosome, y = Count, fill = Higher_Expression)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Distribution of DEGs by Chromosome Segregated by Sample Type",
+       x = "Chromosome", y = "Number of DEGs", fill = "Higher Expression")
+
+# Bar chart: Percentage of DEGs upregulated/downregulated in Tumor
+deg_percentages <- significant_genes %>%
+  mutate(Expression_Category = ifelse(Higher_Expression == "Tumor", "Upregulated in Tumor", "Downregulated in Tumor")) %>%
+  group_by(Expression_Category) %>%
+  summarize(Percentage = n() / nrow(significant_genes) * 100)
+
+ggplot(deg_percentages, aes(x = Expression_Category, y = Percentage, fill = Expression_Category)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Percentage of DEGs Upregulated and Downregulated in Tumor Samples",
+       x = "Expression Category", y = "Percentage", fill = "Category")
+
+# Heatmap: Gene expression by sample
+gene_expression_matrix <- as.matrix(gene_expression[,-1])  # Assuming Probe_ID is the first column
+rownames(gene_expression_matrix) <- gene_expression$Probe_ID
+pheatmap(gene_expression_matrix, main = "Gene Expression Heatmap by Sample")
+
+# Clustermap: Gene expression by sample
+pheatmap(gene_expression_matrix, main = "Gene Expression Clustermap by Sample", clustering_distance_rows = "euclidean", clustering_distance_cols = "euclidean", clustering_method = "complete")
+
+# part 2 findings
+The analysis reveals notable differences in gene expression between normal and tumor samples, with significant variation across chromosomes. Chromosomes with higher DEG counts may be critical in tumor biology. Upregulated genes in tumors likely contribute to cancer development, while downregulated genes may signify loss of normal cellular functions. The heatmap and clustermap visually highlight clusters of genes with shared expression profiles, potentially uncovering pathways or networks affected in tumors. These insights can guide further investigations into specific genes or pathways for therapeutic targeting.
